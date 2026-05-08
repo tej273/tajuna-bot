@@ -2,31 +2,31 @@ const { Telegraf, Markup } = require('telegraf');
 const fs = require('fs');
 
 // ============================================================
-//  CONFIGURATION — edit in .env file
+//  CONFIGURATION — set these in your .env file
 // ============================================================
-const BOT_TOKEN    = process.env.BOT_TOKEN;
+const BOT_TOKEN     = process.env.BOT_TOKEN;
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
+const UPI_ID        = process.env.UPI_ID || 'yourname@upi';
 
-const GROUP_1_LINK = process.env.GROUP_1_LINK || 'https://t.me/your_group_1';
-const GROUP_2_LINK = process.env.GROUP_2_LINK || 'https://t.me/your_group_2';
+// ── Channel / Group IDs (already set from your info) ────────
+const GROUP_390_ID  = -1003650061205;  // Tajuna's Exclusive 🔥
+const GROUP_2000_ID = -1003982929766; // Tajuna's Private 💎🔥
 
-
+// ── QR code image paths ──────────────────────────────────────
 const QR_390_PATH  = './390.jpeg';
 const QR_2000_PATH = './2000.jpeg';
-const UPI_ID       = process.env.UPI_ID || 'yourname@upi';
-
 
 // ============================================================
 
-if (!BOT_TOKEN)    throw new Error('BOT_TOKEN is not set in .env');
+if (!BOT_TOKEN)     throw new Error('BOT_TOKEN is not set in .env');
 if (!ADMIN_CHAT_ID) throw new Error('ADMIN_CHAT_ID is not set in .env');
 
 const bot = new Telegraf(BOT_TOKEN);
 
-// ── In-memory state (survives only while process runs) ──────
+// ── In-memory state ──────────────────────────────────────────
 const pendingUpload = {}; // { userId: plan }
 
-// ── JSON database ───────────────────────────────────────────
+// ── JSON database ────────────────────────────────────────────
 const DB_FILE = './db.json';
 
 function loadDB() {
@@ -42,7 +42,26 @@ function saveDB(db) {
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
 }
 
-// ── Keyboards ───────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────
+function nowIST() {
+  return new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+}
+
+async function safeSend(fn) {
+  try { return await fn(); } catch (e) { console.error('Send error:', e.message); }
+}
+
+// Generate a single-use, time-limited invite link for a group
+async function createSingleUseLink(groupId) {
+  const expireDate = Math.floor(Date.now() / 1000) + 60 * 60 * 24; // 24 hours
+  const result = await bot.telegram.createChatInviteLink(groupId, {
+    member_limit: 1,       // only 1 person can use this link
+    expire_date: expireDate,
+  });
+  return result.invite_link;
+}
+
+// ── Keyboards ────────────────────────────────────────────────
 const mainMenuKeyboard = () =>
   Markup.inlineKeyboard([[Markup.button.callback('🚀 START', 'start_main')]]);
 
@@ -56,18 +75,6 @@ const planKeyboard = () =>
 const backKeyboard = () =>
   Markup.inlineKeyboard([[Markup.button.callback('🔙 Back / START', 'start_main')]]);
 
-const joinKeyboard390 = () =>
-  Markup.inlineKeyboard([
-    [Markup.button.url('👉 Join Exclusive Group', GROUP_1_LINK)],
-    [Markup.button.callback('🔙 Main Menu', 'start_main')],
-  ]);
-
-const joinKeyboard2000 = () =>
-  Markup.inlineKeyboard([
-    [Markup.button.url('👉 Join Private VIP Group', GROUP_2_LINK)],
-    [Markup.button.callback('🔙 Main Menu', 'start_main')],
-  ]);
-
 const approvalKeyboard = (userId, plan) =>
   Markup.inlineKeyboard([
     [
@@ -75,15 +82,6 @@ const approvalKeyboard = (userId, plan) =>
       Markup.button.callback('❌ Reject',  `reject_${userId}_${plan}`),
     ],
   ]);
-
-// ── Helpers ─────────────────────────────────────────────────
-function nowIST() {
-  return new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-}
-
-async function safeSend(fn) {
-  try { await fn(); } catch (e) { console.error('Send error:', e.message); }
-}
 
 // ── /start ───────────────────────────────────────────────────
 bot.start(async (ctx) => {
@@ -109,10 +107,12 @@ bot.action('start_main', async (ctx) => {
     `👑 *₹2000 — Private VIP Plan*\n` +
     `_Full VIP access, requests & bonus drops_`,
     { parse_mode: 'Markdown', ...planKeyboard() }
-  ).catch(() => ctx.reply(
-    `👋 Hello, *${name}*! Choose your plan:`,
-    { parse_mode: 'Markdown', ...planKeyboard() }
-  ));
+  ).catch(() =>
+    ctx.reply(
+      `👋 Hello, *${name}*! Choose your plan:`,
+      { parse_mode: 'Markdown', ...planKeyboard() }
+    )
+  );
 });
 
 // ── ₹390 Plan ────────────────────────────────────────────────
@@ -270,31 +270,60 @@ bot.action(/^approve_(\d+)_(.+)$/, async (ctx) => {
   };
   saveDB(db);
 
-  const planName = plan === '390' ? '💎 Exclusive' : '👑 Private VIP';
-  const keyboard = plan === '390' ? joinKeyboard390() : joinKeyboard2000();
-  const note     = plan === '390'
+  const planName  = plan === '390' ? '💎 Exclusive' : '👑 Private VIP';
+  const groupId   = plan === '390' ? GROUP_390_ID : GROUP_2000_ID;
+  const note      = plan === '390'
     ? '⏰ Your access is here for Tajunas content!'
-    : '🎊 You have *VIP access*. Welcome!';
+    : '🎊 You have *VIP access*. Welcome to the inner circle!';
 
-  await safeSend(() =>
-    bot.telegram.sendMessage(
-      userId,
-      `🎉 *Payment Approved!*\n\n` +
-      `Your *${planName}* plan is now active.\n\n` +
-      `👇 Click the button below to join your group:\n\n` +
-      `${note}`,
-      { parse_mode: 'Markdown', ...keyboard }
-    )
-  );
+  // ── Generate single-use, expiring invite link ────────────
+  let inviteLink = null;
+  try {
+    inviteLink = await createSingleUseLink(groupId);
+  } catch (e) {
+    console.error('❌ Failed to create invite link:', e.message);
+  }
+
+  if (inviteLink) {
+    await safeSend(() =>
+      bot.telegram.sendMessage(
+        userId,
+        `🎉 *Payment Approved!*\n\n` +
+        `Your *${planName}* plan is now active.\n\n` +
+        `${note}\n\n` +
+        `👇 Tap the button below to join:\n\n` +
+        `⚠️ *This link is personal — it only works once.*\n` +
+        `Do not share it with anyone.`,
+        {
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([
+            [Markup.button.url('👉 Join Now', inviteLink)],
+            [Markup.button.callback('🔙 Main Menu', 'start_main')],
+          ]),
+        }
+      )
+    );
+  } else {
+    // Fallback if link generation fails
+    await safeSend(() =>
+      bot.telegram.sendMessage(
+        userId,
+        `🎉 *Payment Approved!*\n\n` +
+        `Your *${planName}* plan is active.\n\n` +
+        `⚠️ There was an issue generating your link.\n` +
+        `Please contact admin directly to get access.`,
+        { parse_mode: 'Markdown', ...mainMenuKeyboard() }
+      )
+    );
+  }
 
   // Update admin message
   await ctx.editMessageCaption(
     (ctx.callbackQuery.message.caption || '') +
-    `\n\n✅ *APPROVED* at ${nowIST()}`,
+    `\n\n✅ *APPROVED* at ${nowIST()}` +
+    (inviteLink ? `\n🔗 Link sent (1-use only)` : '\n⚠️ Link generation failed'),
     { parse_mode: 'Markdown' }
   ).catch(() => {});
-
-
 });
 
 // ── Admin: Reject ────────────────────────────────────────────
@@ -331,7 +360,7 @@ bot.action(/^reject_(\d+)_(.+)$/, async (ctx) => {
   ).catch(() => {});
 });
 
-// ── Non-photo text messages ──────────────────────────────────
+// ── Non-photo messages ───────────────────────────────────────
 bot.on('message', async (ctx) => {
   const userId = ctx.from.id;
   if (pendingUpload[userId]) {
@@ -354,5 +383,5 @@ bot.launch()
 process.once('SIGINT',  () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
-// Keep-alive HTTP server (for hosting platforms like Railway/Render)
+// Keep-alive HTTP server (for Railway / Render / Replit)
 require('http').createServer((req, res) => res.end('Bot is running')).listen(process.env.PORT || 3000);
